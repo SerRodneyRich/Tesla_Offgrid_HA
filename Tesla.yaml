@@ -1,0 +1,266 @@
+blueprint:
+  name: Tesla, Full Off-Grid, Maximize Solar Charging
+  description: Adjust the charging current based on battery SOC, PV vs AC loads comparison.  Works with Tessie.
+  domain: automation
+  input:
+    charge_cable:
+      name: Charge Cable Entity
+      description: The entity representing the charge cable status.
+      selector:
+        entity:
+          domain: binary_sensor
+    battery_soc:
+      name: Battery SOC Sensor
+      description: The entity representing the battery SOC.
+      selector:
+        entity:
+          domain: sensor
+    vebus_alarm:
+      name: VE.Bus Alarm
+      description: The entity representing the VE.Bus alarm.
+      selector:
+        entity:
+          domain: sensor
+    charge_current:
+      name: Charge Current Number
+      description: The entity representing the charge current.
+      selector:
+        entity:
+          domain: number
+    charge_switch:
+      name: Charge Switch
+      description: The switch to control charging.
+      selector:
+        entity:
+          domain: switch
+    pv_watts:
+      name: PV Watts Sensor
+      description: The entity representing the PV watts.
+      selector:
+        entity:
+          domain: sensor
+    ac_loads:
+      name: AC Loads Sensor
+      description: The entity representing the AC loads.
+      selector:
+        entity:
+          domain: sensor
+    increase_threshold:
+      name: Increase Threshold
+      description: The threshold for increasing the charging current.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 5000
+          unit_of_measurement: W
+    maintain_threshold:
+      name: Maintain Threshold
+      description: The threshold for maintaining the charging current.
+      default: 100
+      selector:
+        number:
+          min: 0
+          max: 5000
+          unit_of_measurement: W
+    decrease_threshold:
+      name: Decrease Threshold
+      description: The threshold for decreasing the charging current.
+      default: 200
+      selector:
+        number:
+          min: 0
+          max: 5000
+          unit_of_measurement: W
+    soc_cap_95:
+      name: SOC Cap 95%
+      description: Maximum charging current for SOC below 95%.
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 48
+          unit_of_measurement: A
+    soc_cap_97:
+      name: SOC Cap 97%
+      description: Maximum charging current for SOC between 95% and 97%.
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 48
+          unit_of_measurement: A
+    soc_cap_99:
+      name: SOC Cap 99%
+      description: Maximum charging current for SOC between 97% and 99%.
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 48
+          unit_of_measurement: A
+    soc_cap_100:
+      name: SOC Cap 100%
+      description: Maximum charging current for SOC above 99%.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 48
+          unit_of_measurement: A
+
+trigger:
+  - platform: time_pattern
+    minutes: /1
+
+condition: []
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ is_state('binary_sensor.mystique_charge_cable', 'off') }}"
+        sequence: []
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input battery_soc
+            below: 93
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id: !input charge_switch
+            data: {}
+      - conditions:
+          - condition: template
+            value_template: "{{ is_state(states('!input vebus_alarm'), 'WARNING') }}"
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input charge_current
+            data_template:
+              value: >
+                {% set current_charge = states('number.mystique_charge_current').split(' ')[0] | float %}
+                {{ [1, current_charge - 2] | max }}
+          - service: switch.turn_on
+            target:
+              entity_id: !input charge_switch
+            data: {}
+      - conditions:
+          - condition: template
+            value_template: "{{ is_state(states('!input charge_current'), 'unknown') }}"
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input charge_current
+            data:
+              value: 1
+          - service: switch.turn_off
+            target:
+              entity_id: !input charge_switch
+            data: {}
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input battery_soc
+            below: 95
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input charge_current
+            data:
+              value: !input soc_cap_95
+          - service: switch.turn_off
+            target:
+              entity_id: !input charge_switch
+            data: {}
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input battery_soc
+            above: 95
+            below: 97
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input charge_current
+            data_template:
+              value: >
+                {% set pv_watts = states('!input pv_watts') | float %}
+                {% set ac_loads = states('!input ac_loads') | float %}
+                {% set current_charge = states('number.mystique_charge_current').split(' ')[0] | float %}
+                {% set proposed_current = current_charge %}
+
+                {% if ac_loads + 150 < pv_watts + states('!input increase_threshold') %}
+                  {% set proposed_current = current_charge + 1 %}
+                {% elif ac_loads + 150 > pv_watts + states('!input decrease_threshold') %}
+                  {% set proposed_current = current_charge - 1 %}
+                {% else %}
+                  {% set proposed_current = current_charge %}
+                {% endif %}
+                {{ [1, [proposed_current, states('!input soc_cap_97')] | min] | max }}
+          - service: switch.turn_on
+            target:
+              entity_id: !input charge_switch
+            data: {}
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input battery_soc
+            above: 96
+            below: 99
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input charge_current
+            data_template:
+              value: >
+                {% set pv_watts = states('!input pv_watts') | float %}
+                {% set ac_loads = states('!input ac_loads') | float %}
+                {% set current_charge = states('number.mystique_charge_current').split(' ')[0] | float %}
+                {% set proposed_current = current_charge %}
+
+                {% if ac_loads + 150 < pv_watts + states('!input increase_threshold') %}
+                  {% set proposed_current = current_charge + 1 %}
+                {% elif ac_loads + 150 > pv_watts + states('!input decrease_threshold') %}
+                  {% set proposed_current = current_charge - 1 %}
+                {% else %}
+                  {% set proposed_current = current_charge %}
+                {% endif %}
+                {{ [1, [proposed_current, states('!input soc_cap_99')] | min] | max }}
+          - service: switch.turn_on
+            target:
+              entity_id: !input charge_switch
+            data: {}
+      - conditions:
+          - condition: numeric_state
+            entity_id: !input battery_soc
+            above: 99
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input charge_current
+            data_template:
+              value: >
+                {% set pv_watts = states('!input pv_watts') | float %}
+                {% set ac_loads = states('!input ac_loads') | float %}
+                {% set current_charge = states('number.mystique_charge_current').split(' ')[0] | float %}
+                {% set proposed_current = current_charge %}
+
+                {% if ac_loads + 150 < pv_watts + states('!input increase_threshold') %}
+                  {% set proposed_current = current_charge + 1 %}
+                {% elif ac_loads + 150 > pv_watts + states('!input decrease_threshold') %}
+                  {% set proposed_current = current_charge - 1 %}
+                {% else %}
+                  {% set proposed_current = current_charge %}
+                {% endif %}
+                {{ [1, [proposed_current, states('!input soc_cap_100')] | min] | max }}
+          - service: switch.turn_on
+            target:
+              entity_id: !input charge_switch
+            data: {}
+variables:
+  increase_threshold: !input increase_threshold
+  maintain_threshold: !input maintain_threshold
+  decrease_threshold: !input decrease_threshold
+  soc_cap_95: !input soc_cap_95
+  soc_cap_97: !input soc_cap_97
+  soc_cap_99: !input soc_cap_99
+  soc_cap_100: !input soc_cap_100
+
