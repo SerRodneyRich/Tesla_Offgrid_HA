@@ -125,11 +125,7 @@ action:
           - condition: numeric_state
             entity_id: !input battery_soc
             below: 93
-        sequence:
-          - service: switch.turn_off
-            target:
-              entity_id: !input charge_switch
-            data: {}
+        sequence: []
       - conditions:
           - condition: template
             value_template: "{{ is_state(states('!input vebus_alarm'), 'WARNING') }}"
